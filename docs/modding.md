@@ -87,6 +87,7 @@ eboot = "941f887a562aae054fac35af8cc8f27cf075f3d4cc2e029fb5ae2a663aaa5ae7"
 description = "the three company logos at startup are skipped"
 option = "startup.skip_intro"      # optional: a setting that switches it
 enabled = true                      # optional, default true
+default_on = true                   # optional; false offers an opt-in launcher switch
 
 [site.logo-fromsoft]
 address = "0x04d99138"              # Binary Ninja address (image at 0x400000)
@@ -99,6 +100,10 @@ kind = "code"                       # optional: "code" (default) or "data"
   file for another build is skipped.
 - Every site's `expect` is checked before anything is written; one mismatch
   refuses the whole file. A site that already holds `bytes` counts as done.
+- `default_on = false` leaves a patch off until `[patches] <name> = true`
+  or its launcher checkbox enables it individually. The All on button skips
+  default-off entries. `enabled = false` instead locks it off.
+  Existing manifests keep their default-on behavior.
 - `kind = "code"` restores the page to read-only and executable afterwards;
   `"data"` leaves it writable.
 - `BBHOST_PATCHES=0` skips all manifests. The log has one line per file:
@@ -143,3 +148,48 @@ The `tools/` folder has small, independent scripts for the game's formats:
 `gfx_dump.py` (Scaleform menus). Each documents its options at the top of
 the file. Scripts that read the game need `BBHOST_APP0` set to the folder
 that contains `dvdroot_ps4`.
+
+## Importing reviewed community patches
+
+`tools/import_community_patches.py` converts selected entries from the community
+Bloodborne XML to the manifest format. It does **not** import arbitrary patches
+or obey the XML's `isEnabled` values. Every imported option starts off and
+applies only after enabling it in the launcher's Patches tab and restarting.
+
+```sh
+python3 tools/import_community_patches.py --list
+python3 tools/import_community_patches.py --xml /path/to/Bloodborne.xml \
+  --eboot /path/to/decrypted/eboot.bin --output /path/to/new-import-directory \
+  --patch performance-fast-rsqrt --patch intel-black-tonemap
+```
+
+Copy the generated TOML files into `<mods>/patches` (create that folder if
+needed). The output directory must be new; existing patches are never overwritten.
+The importer requires the exact supported 1.09 SHA-256, checks each selected
+replacement against its reviewed address/byte list, and reads the original bytes
+from executable ELF segments to populate `expect`. ELF addresses receive the
+preferred 0x400000 base exactly once; XML addresses are already at that base.
+The game executable and the XML are read only. No game data is shipped here.
+
+| Option | Scope and tradeoff |
+|---|---|
+| `performance-fast-rsqrt` | Seven scalar reciprocal-square-root substitutions from Kyo's Performance Patch. Experimental: fewer refinement operations change numerical precision; visual/gameplay correctness and speedup require measurement. The rest of the bundle is excluded. |
+| `intel-black-tonemap` | Kyo's black-tonemap workaround, reported for Intel CPUs in DLC areas. Test only when the symptom exists. |
+| `intel-sfx-fallback` | emoose's early return in an effect draw routine. Removes ribbon effects of that type. Last resort only: bbhost already fixes the Windows red-zone issue in native ribbon writers (`src/decomp/sfx/ribbons.cpp`). |
+
+The bundled Performance Patch also changes renderer settings, synchronization,
+clock routines, physics, sleep intervals and code caves. In particular its
+`0x025629f0` worker sleep overlaps frame-rate-controlled timing, and graphics
+and LOD toggles already have live bbhost controls. Those edits, FPS/uncap lists,
+resolution/light-grid lists and HTTP disabling are intentionally excluded.
+Use PC Graphics/Effects and the native frame cap/resolution controls for those
+settings. No generic XML-loader override is added.
+
+Test one imported option at a time at the same resolution, frame cap and scene.
+For tonemapping compare a DLC area; for the SFX fallback compare ribbon effects
+and confirm whether the crash still occurs. For fast math compare frame times,
+cloth, animation and gameplay at 30/60/high caps. These are optional experiments,
+not a claim of compatibility or performance on every CPU. Disable the checkbox
+and restart to restore the default. `BBHOST_PATCHES=0` is the emergency switch
+for all manifests. Look for `patch: <name>` in the log to check whether a patch
+was applied or refused; a checked box alone does not prove application.
