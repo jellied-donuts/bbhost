@@ -229,7 +229,7 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
     std::vector<PatchRow> patch_rows;
     for (PatchListing& p : patch_manifests_list(cfg.mods.empty() ? cfg.data + "/mods" : cfg.mods)) {
         PatchRow r;
-        r.on = r.was = !patch_manifest_off(p.name);
+        r.on = r.was = !patch_manifest_off(p.name, p.default_on);
         r.p = std::move(p);
         patch_rows.push_back(std::move(r));
     }
@@ -247,7 +247,8 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
         if (o == "debug.free_camera") return "The same switch as the Game tab's Debug camera.";
         if (o == "loading.quick_reentry") return "Saved as quick_reentry under [loading] in bbhost.toml.";
         if (o == "streaming.all_post_processors") return "Saved as all_post_processors under [streaming] in bbhost.toml.";
-        return "Saved as " + r.p.name + " under [patches] in bbhost.toml.";
+        return std::string(r.p.default_on ? "" : "Off by default; enable this entry individually to test it. ") +
+               "Saved as " + r.p.name + " under [patches] in bbhost.toml.";
     };
 
     EbootCheck eboot = check_eboot(f[kEboot].str());
@@ -448,6 +449,7 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
                 if (!patch_rows.empty()) {
                     auto set_all = [&](bool v) {
                         for (PatchRow& r : patch_rows) {
+                            if (v && !r.p.default_on) continue;  // bulk enabling keeps experiments off
                             const bool other_eboot = eboot.ok && !r.p.eboot.empty() && r.p.eboot != eboot.sha;
                             if (!r.p.error.empty() || !r.p.enabled || other_eboot) continue;
                             if (!r.p.option.empty() && !patch_manifest_option_known(r.p.option)) continue;
