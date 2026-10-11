@@ -37,12 +37,13 @@ struct PatchListing {
     std::string path;  // the file it was read from
     std::string name, description, option, eboot;
     bool enabled = true;  // its own [patch] enabled
+    bool default_on = true;  // initial switch; experimental imports use false
     std::string error;    // why it does not parse ("" when it does)
 };
 // Every manifest patch_manifests_apply would read, by file name, a later
 // directory's replacing an earlier one's. `mods` is the mods directory ("" for none).
 std::vector<PatchListing> patch_manifests_list(const std::string& mods);
 // Whether the player left this manifest out: [patches] <name> = false.
-bool patch_manifest_off(const std::string& name);
+bool patch_manifest_off(const std::string& name, bool default_on = true);
 // Whether `option` is one a manifest may name (startup.skip_intro, ...).
 bool patch_manifest_option_known(const std::string& option);

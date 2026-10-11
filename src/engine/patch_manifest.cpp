@@ -32,7 +32,7 @@ struct Site {
 
 struct Manifest {
     std::string path, name, eboot, description, option;
-    bool enabled = true;
+    bool enabled = true, default_on = true;
     std::vector<Site> sites;
 };
 
@@ -74,6 +74,12 @@ bool parse_manifest(const std::string& path, Manifest* m, std::string* err) {
     m->option = get("patch.option");
     const std::string en = get("patch.enabled");
     m->enabled = en.empty() || en == "true" || en == "1";
+    const std::string initial = get("patch.default_on");
+    if (!initial.empty() && initial != "true" && initial != "false" && initial != "1" && initial != "0") {
+        *err = "patch.default_on must be true or false";
+        return false;
+    }
+    m->default_on = initial.empty() || initial == "true" || initial == "1";
     if (m->name.empty() || m->eboot.empty()) {
         *err = "[patch] needs name and eboot";
         return false;
@@ -239,7 +245,7 @@ bool patch_manifest_option_known(const std::string& option) {
     return known;
 }
 
-bool patch_manifest_off(const std::string& name) {
+bool patch_manifest_off(const std::string& name, bool default_on) {
     const std::string v = config_value("patches." + name);
     if (!v.empty()) return v == "false" || v == "0";
     // The Old Hunters was a PC enhancement in v0.2.9, `old_hunters` under
@@ -249,7 +255,7 @@ bool patch_manifest_off(const std::string& name) {
         const std::string w = config_value("world.old_hunters");
         return w == "false" || w == "0";
     }
-    return false;
+    return !default_on;
 }
 
 std::vector<PatchListing> patch_manifests_list(const std::string& mods) {
@@ -266,6 +272,7 @@ std::vector<PatchListing> patch_manifests_list(const std::string& mods) {
             l.option = m.option;
             l.eboot = m.eboot;
             l.enabled = m.enabled;
+            l.default_on = m.default_on;
         }
         out.push_back(l);
     }
@@ -298,7 +305,7 @@ void patch_manifests_apply(ElfImage* image) {
             continue;
         }
         if (!m.enabled) continue;
-        if (patch_manifest_off(m.name)) {
+        if (patch_manifest_off(m.name, m.default_on)) {
             host_log("patch: %s off ([patches] in bbhost.toml: the setup window's Patches tab)", m.name.c_str());
             continue;
         }
