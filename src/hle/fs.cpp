@@ -518,6 +518,25 @@ std::atomic<int> g_nocase_hits{0};
 // Dynamic mounts (save data): guest prefix -> host directory under g_data.
 std::vector<std::pair<std::string, std::string>> g_mounts;
 
+// An empty replacement is not a usable game asset. Some prepared mod trees
+// contain zero-byte entries: never let one shadow the normal asset layers.
+// stat follows BB_Launcher's symlinks; missing/broken links also fall through.
+bool merged_asset_usable(const std::string& path) {
+    if (path.empty()) return false;
+#if defined(_WIN32)
+    struct _stat64 st{};
+    if (_stat64(path.c_str(), &st) != 0 || !(st.st_mode & _S_IFREG)) return false;
+#else
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return false;
+#endif
+    if (st.st_size > 0) return true;
+    static std::atomic<unsigned> empty_reports{0};
+    if (empty_reports.fetch_add(1, std::memory_order_relaxed) < 16)
+        host_log("FS merged assets: ignoring empty replacement %s; trying original asset layers", path.c_str());
+    return false;
+}
+
 void mkdir_confined(const std::string& path);
 
 std::string guest_to_host(const char* guest) {
@@ -621,7 +640,7 @@ std::string guest_to_host(const char* guest) {
             const std::string relative = rest.substr(12);
             std::string over = join_path(*layer, relative);
             if (!path_exists(over.c_str())) over = resolve_nocase(*layer, relative);
-            if (!over.empty() && path_exists(over.c_str()) && !is_dir_path(over.c_str())) {
+            if (merged_asset_usable(over)) {
                 const int hit = g_mod_hits.fetch_add(1);
                 static const char* trace = std::getenv("BBHOST_FS_TRACE");
                 if (hit < 32 || (trace && *trace && g.find(trace) != std::string::npos))
@@ -1457,7 +1476,7 @@ std::string hle_fs_overlay_file(const char* rel) {
             rest.erase(0, 12);
             std::string p = join_path(*layer, rest);
             if (!path_exists(p.c_str())) p = resolve_nocase(*layer, rest);
-            if (!p.empty() && path_exists(p.c_str()) && !is_dir_path(p.c_str())) return p;
+            if (merged_asset_usable(p)) return p;
             continue;
         }
         const std::string p = join_path(*layer, rel[0] == '/' ? rel + 1 : rel);
