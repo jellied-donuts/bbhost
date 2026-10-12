@@ -49,6 +49,38 @@ int main() {
     CHECK(fs::file_size(base/"dvdroot_ps4/chr/replace.bin") == 4);
     int fd=hle_kernel_open("/app0/dvdroot_ps4/chr/link.bin", 0, 0); CHECK(fd>=0); hle_kernel_close(fd);
     fd=hle_kernel_open("/data/save.bin", 1|kOrbisOCreat, 0666); CHECK(fd>=0); hle_kernel_close(fd);
+    // Reproduce the startup failure: a zero-byte common.tpf.dcx in the
+    // merged tree must not shadow the nonempty original or fool overlay probes.
+    put(base/"dvdroot_ps4/menu/common.tpf.dcx", "original texture pack");
+    put(merged/"menu/common.tpf.dcx", "");
+    CHECK(hle_fs_map_path("/app0/dvdroot_ps4/menu/common.tpf.dcx") == (base/"dvdroot_ps4/menu/common.tpf.dcx").string());
+    CHECK(hle_fs_overlay_file("/dvdroot_ps4/menu/common.tpf.dcx").empty());
+    // stat and open must agree on the fallback, not expose the empty entry.
+    unsigned char sb[120]{};
+    CHECK(hle_fs_stat_path("/app0/dvdroot_ps4/menu/common.tpf.dcx", sb) == 0);
+    std::uint64_t size = 0;
+    std::memcpy(&size, sb + 72, sizeof(size));
+    CHECK(size == fs::file_size(base/"dvdroot_ps4/menu/common.tpf.dcx"));
+    fd = hle_kernel_open("/app0/dvdroot_ps4/menu/common.tpf.dcx", 0, 0);
+    CHECK(fd >= 0); CHECK(hle_kernel_fstat(fd, sb) == 0); hle_kernel_close(fd);
+    std::memcpy(&size, sb + 72, sizeof(size)); CHECK(size > 0);
+    CHECK(fs::file_size(merged/"menu/common.tpf.dcx") == 0);
+    // Empty symlink targets, broken links and lower overlay fallbacks.
+    put(root/"empty.bin", "");
+    fs::create_symlink(root/"empty.bin", merged/"chr/empty-link.bin");
+    put(base/"dvdroot_ps4/chr/empty-link.bin", "base");
+    CHECK(hle_fs_map_path("/app0/dvdroot_ps4/chr/empty-link.bin") == (base/"dvdroot_ps4/chr/empty-link.bin").string());
+    fs::create_symlink(root/"absent.bin", merged/"chr/broken-link.bin");
+    put(base/"dvdroot_ps4/chr/broken-link.bin", "base");
+    CHECK(hle_fs_map_path("/app0/dvdroot_ps4/chr/broken-link.bin") == (base/"dvdroot_ps4/chr/broken-link.bin").string());
+    put(merged/"chr/legacy.bin", "");
+    CHECK(hle_fs_overlay_file("/dvdroot_ps4/chr/legacy.bin") == (legacy/"dvdroot_ps4/chr/legacy.bin").string());
+    put(merged/"chr/update.bin", "");
+    CHECK(hle_fs_map_path("/app0/dvdroot_ps4/chr/update.bin") == base.string()+"-UPDATE/dvdroot_ps4/chr/update.bin");
+    // A later valid replacement remains usable; no permanent blacklist.
+    put(merged/"menu/common.tpf.dcx", "modded texture pack");
+    CHECK(hle_fs_map_path("/app0/dvdroot_ps4/menu/common.tpf.dcx") == (merged/"menu/common.tpf.dcx").string());
+    CHECK(hle_fs_overlay_file("/dvdroot_ps4/menu/common.tpf.dcx") == (merged/"menu/common.tpf.dcx").string());
     setup(nullptr);
     CHECK(hle_fs_map_path("/app0/dvdroot_ps4/chr/replace.bin") == (legacy/"dvdroot_ps4/chr/replace.bin").string());
     fs::remove_all(root);
