@@ -1004,7 +1004,8 @@ int main(int argc, char** argv) {
     }
     hle_fs_set_roots(cfg.app0.c_str(), cfg.data.empty() ? nullptr : cfg.data.c_str(),
                      cfg.tmp.empty() ? nullptr : cfg.tmp.c_str(), eboot,
-                     cfg.mods.empty() ? nullptr : cfg.mods.c_str());
+                     cfg.mods.empty() ? nullptr : cfg.mods.c_str(),
+                     cfg.asset_mods_enabled ? cfg.asset_mods.c_str() : nullptr);
     plugins_load();  // before the HLE table is bound: a plugin may replace an import
     if (host_settings().debug_camera && plugins_active("debug_menu"))
         host_log("debug camera: on with the debug menu - its LOAD TEST and DUNGEON MOVEMAP TEST crash the game "
