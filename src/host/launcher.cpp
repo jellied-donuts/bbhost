@@ -160,9 +160,11 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
     ImGui_ImplSDLRenderer3_Init(ren);
 
     // The fields, from what the configuration holds now.
-    enum { kApp0, kEboot, kData, kToken, kHost, kFields };
+    enum { kApp0, kEboot, kData, kAssetMods, kToken, kHost, kFields };
     Field f[kFields];
     f[kApp0].set(cfg.app0);
+    f[kAssetMods].set(cfg.asset_mods);
+    bool asset_mods_enabled = cfg.asset_mods_enabled;
     f[kEboot].set(cfg.eboot);
     f[kData].set(cfg.data == config_default_data_dir() ? std::string() : cfg.data);
     f[kToken].set(cfg.update_token_file);
@@ -284,6 +286,8 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
     };
     auto save = [&]() -> bool {
         std::vector<ConfigEdit> e;
+        e.push_back({"paths", "asset_mods", toml_string(saved_path(f[kAssetMods].str()))});
+        e.push_back({"mods", "asset_overlay", asset_mods_enabled ? "true" : "false"});
         e.push_back({"paths", "app0", toml_string(saved_path(f[kApp0].str()))});
         e.push_back({"paths", "eboot", toml_string(saved_path(f[kEboot].str()))});
         if (!f[kData].str().empty()) e.push_back({"paths", "data", toml_string(saved_path(f[kData].str()))});
@@ -532,6 +536,15 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
                                                 : "not the 1.09 eboot (SHA-256 " + eboot.sha.substr(0, 16) + "...)");
         path_row("Data folder (saves and caches; empty for the default)", kData, true, config_default_data_dir().c_str());
 
+        ImGui::SeparatorText("Merged asset mods");
+        ImGui::Checkbox("Use merged asset mods (restart required)", &asset_mods_enabled);
+        path_row("Modded dvdroot_ps4 folder", kAssetMods, true, "D:/Bloodborne/CUSA00900-mods/dvdroot_ps4");
+        if (asset_mods_enabled) status_line(is_dir(f[kAssetMods].str()), "mod directory exists",
+                                            "select the merged dvdroot_ps4 folder itself");
+        ImGui::TextWrapped("Files in this folder take priority; missing files use the original install. Neither tree is modified. "
+                           "Your existing patch folder stays separate. Select BB_Launcher's active merged folder, not its Mods library.");
+        ImGui::TextDisabled("Asset mods can replace bbhost's PC menu files. Disable this switch to compare an unmodded run.");
+
         ImGui::SeparatorText("Online");
         ImGui::SetNextItemWidth(-1);
         static const char* const kServerLabels[] = {kServers[0].label, kServers[1].label, "Custom"};
@@ -644,7 +657,7 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
         ImGui::Checkbox("Show this window every time bbhost starts", &show_every_start);
         ImGui::TextDisabled("Or start bbhost with --setup to open it once.");
         ImGui::Spacing();
-        const bool can_play = app0_ok && eboot.ok;
+        const bool can_play = app0_ok && eboot.ok && (!asset_mods_enabled || is_dir(f[kAssetMods].str()));
         ImGui::BeginDisabled(!can_play);
         const bool play = ImGui::Button("Play", ImVec2(140 * scale, 0)) || (test && !std::strcmp(test, "play") && ++frames > 30);
         ImGui::EndDisabled();
@@ -676,7 +689,7 @@ LauncherResult launcher_run(const HostConfig& cfg, const std::string& reason, bo
         }
         if (!can_play) {
             ImGui::SameLine();
-            ImGui::TextDisabled("Play needs the game folder and the 1.09 eboot.");
+            ImGui::TextDisabled("Play needs the game folder, the 1.09 eboot, and any enabled mod directory.");
         }
         if (!saved_note.empty()) ImGui::TextDisabled("%s", saved_note.c_str());
         if (play && can_play && save()) {
