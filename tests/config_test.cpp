@@ -226,6 +226,16 @@ int main() {
         CHECK(c.eboot == base + "/eboot.bin");  // a path given is kept
     }
 
+    {
+        HostConfig c = load("[paths]\nasset_mods = \"../merged/dvdroot_ps4\"\n[mods]\nasset_overlay = true\n");
+        CHECK(c.asset_mods_enabled);
+        CHECK(fs::path(c.asset_mods).lexically_normal() == (g_dir / "merged/dvdroot_ps4").lexically_normal());
+        c = load("[paths]\nasset_mods = \"../merged/dvdroot_ps4\"\n");
+        CHECK(!c.asset_mods_enabled);
+        c = load("[mods]\nasset_overlay = false\n");
+        CHECK(!c.asset_mods_enabled);
+    }
+
     std::error_code ec;
     fs::remove_all(g_dir, ec);
     if (g_fail) {
