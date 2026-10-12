@@ -82,3 +82,27 @@ does not replace directory listings with the partial merged tree; listings stay
 with the existing lower layer. Mods that rely on discovery of entirely new
 filenames by directory enumeration need additional support. It does not merge
 archive contents, stack individual mods, download mods, or manage activation.
+
+## Empty assets and restart behavior
+
+Close bbhost completely and start it again after changing the merged-assets
+setting. A computer restart is unnecessary. Files in either tree are not
+modified by enabling this option.
+
+On Windows, symlink/reparse-point metadata is read from the opened target,
+so a nonempty mod file is not mistaken for an empty link. The same target
+metadata is used for asset validation, open logging and stat/fstat.
+
+Zero-byte files in the selected merged tree (including symlinks to empty files)
+are skipped with an `ignoring empty replacement` log message. Reads and stat
+then use the existing lower asset layers. A valid, nonempty replacement still
+wins. This does not repair an empty original/update file or a nonempty corrupt
+archive, and does not change other overlay layers' behavior.
+
+If a startup abort reports `menu/common.tpf.dcx -> 0 bytes`, inspect that file and its symlink target
+in the selected merged tree and compare a run with the option off. The full
+log's `FS merged assets:` lines identify which mod paths were used. The
+file-loader's generic advice about an incomplete dump also appears when an
+empty mod file shadows a complete dump; it does not prove the original files
+were changed. If the new build still fails, provide the full `.log` listed
+at the top of the console so the actual source path can be checked.
