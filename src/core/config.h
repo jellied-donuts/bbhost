@@ -12,6 +12,8 @@ struct HostConfig {
     std::string app0;          // paths.app0: the /app0 dump (dvdroot_ps4 inside)
     std::string data;          // paths.data: /data, saves, caches
     std::string tmp;           // paths.tmp
+    std::string asset_mods;    // paths.asset_mods: merged dvdroot_ps4 directory (read-only)
+    bool asset_mods_enabled = false;  // mods.asset_overlay: opt-in, restart required
     std::string mods;          // paths.mods: the asset overlay, resolved ahead of /app0
     std::string eboot;         // paths.eboot
     std::string online_host;   // online.host: replaces *.scej-network.jp in game URLs

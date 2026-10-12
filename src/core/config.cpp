@@ -118,6 +118,8 @@ void apply_values(const std::map<std::string, std::string>& kv, HostConfig* c) {
     str("paths.data", &c->data);
     str("paths.tmp", &c->tmp);
     str("paths.mods", &c->mods);
+    str("paths.asset_mods", &c->asset_mods);
+    if (auto it = kv.find("mods.asset_overlay"); it != kv.end()) c->asset_mods_enabled = it->second == "true";
     str("paths.eboot", &c->eboot);
     str("online.host", &c->online_host);
     str("online.scheme", &c->online_scheme);
@@ -314,7 +316,7 @@ std::string dir_of(const std::string& file) {
 }
 
 // The [paths] keys whose relative values are relative to their file.
-constexpr const char* kPathKeys[] = {"paths.app0", "paths.data", "paths.tmp", "paths.mods", "paths.eboot"};
+constexpr const char* kPathKeys[] = {"paths.app0", "paths.data", "paths.tmp", "paths.mods", "paths.eboot", "paths.asset_mods"};
 
 // One layer's values, made independent of where the file was: relative paths
 // joined to its folder, the template's stand-ins dropped (a package's
