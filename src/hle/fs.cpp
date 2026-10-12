@@ -71,6 +71,9 @@ std::string g_tmp;
 // against - and a modification set kept on its own is reviewable on its own.
 // Empty when there is no such directory.
 std::string g_mods;
+// Explicitly trusted, already merged asset tree. Only dvdroot_ps4 file reads
+// use it; keep lexical paths so BB_Launcher symlinks remain usable.
+std::string g_asset_dvdroot;
 // The host's generated overlays are written at start, before they are
 // mounted, and nothing writes them after (engine/menu_assets.h, and the PC
 // enhancements' engine/change_appearance.h, rebirth.h, five_players.h). So
@@ -118,10 +121,11 @@ std::mutex g_plugin_layer_mu;  // writers
 struct OverlayLayer {
     const std::string* dir;
     const OverlayIndex* index;  // null: no index, probe the disk
+    bool dvdroot_only = false;
 };
 thread_local bool t_without_plugins = false;  // hle_fs_map_path_base
 std::vector<OverlayLayer> overlay_layers() {
-    std::vector<OverlayLayer> v{{&g_mods, nullptr}};
+    std::vector<OverlayLayer> v{{&g_asset_dvdroot, nullptr, true}, {&g_mods, nullptr}};
     if (!t_without_plugins) {
         const int n = g_plugin_layer_count.load(std::memory_order_acquire);
         for (int i = 0; i < n; ++i) v.push_back({&g_plugin_layers[static_cast<std::size_t>(i)], nullptr});
@@ -612,6 +616,20 @@ std::string guest_to_host(const char* guest) {
         if (!app0_lookup) break;
         const std::string* layer = layer_of.dir;
         if (layer->empty()) continue;
+        if (layer_of.dvdroot_only) {
+            if (rest.rfind("dvdroot_ps4/", 0) != 0) continue;
+            const std::string relative = rest.substr(12);
+            std::string over = join_path(*layer, relative);
+            if (!path_exists(over.c_str())) over = resolve_nocase(*layer, relative);
+            if (!over.empty() && path_exists(over.c_str()) && !is_dir_path(over.c_str())) {
+                const int hit = g_mod_hits.fetch_add(1);
+                static const char* trace = std::getenv("BBHOST_FS_TRACE");
+                if (hit < 32 || (trace && *trace && g.find(trace) != std::string::npos))
+                    host_log("FS merged assets: %s -> %s", g.c_str(), over.c_str());
+                return over;
+            }
+            continue;
+        }
         if (g_overlay_index_on && layer_of.index && layer_of.index->valid) {
             if (key_state == 0) key_state = overlay_key(rest, &key) ? 1 : -1;
             if (key_state == 1 && layer_of.index->paths.count(key) == 0) {
@@ -677,6 +695,15 @@ std::string guest_to_host(const char* guest) {
     return host;
 }
 
+bool read_only_asset(const std::string& host) {
+    if (host.empty()) return false;
+    if (!g_asset_dvdroot.empty() && prefix_dir(host, g_asset_dvdroot.c_str())) return true;
+    for (const auto& root : {g_app0, g_update, g_mods}) {
+        if (!root.empty() && prefix_dir(host, join_path(root, "dvdroot_ps4").c_str())) return true;
+    }
+    return false;
+}
+
 std::string dirname_of(const char* path) {
     std::string p = path ? path : "";
     auto slash = p.find_last_of("/\\");
@@ -725,7 +752,7 @@ std::string canonical_dir(const std::string& p) {
 }
 
 void set_roots(const char* app0, const char* data, const char* tmp, const char* eboot,
-               const char* mods) {
+               const char* mods, const char* asset_dvdroot) {
     std::string work = dirname_of(eboot ? eboot : ".");
     std::string data_dir = data ? data : join_path(work, "data");
     std::string tmp_dir = tmp ? tmp : join_path(work, "tmp");
@@ -737,6 +764,11 @@ void set_roots(const char* app0, const char* data, const char* tmp, const char* 
     mkdir_confined(tmp_dir);
     // The game folder and, beside it, the update's (app0 may name either).
     const GameFolders game = config_game_folders(app0 ? app0 : "");
+    g_asset_dvdroot.clear();
+    if (asset_dvdroot && *asset_dvdroot) {
+        if (is_dir_path(asset_dvdroot)) g_asset_dvdroot = canonical_dir(asset_dvdroot);
+        else host_log("FS merged assets: directory missing: %s", asset_dvdroot);
+    }
     g_allowed_roots.clear();
     for (const std::string& r : {game.base, game.update, data_dir, tmp_dir, mods_dir}) {
         std::string c = canonical_dir(r);
@@ -749,6 +781,7 @@ void set_roots(const char* app0, const char* data, const char* tmp, const char* 
     g_data = canonical_dir(data_dir);
     g_tmp = canonical_dir(tmp_dir);
     g_mods = is_dir_path(mods_dir.c_str()) ? canonical_dir(mods_dir) : std::string();
+    if (!g_asset_dvdroot.empty()) host_log("FS merged assets=%s (read-only; original files are fallback)", g_asset_dvdroot.c_str());
     host_log("FS app0=%s data=%s tmp=%s", g_app0.c_str(), g_data.c_str(), g_tmp.c_str());
     if (!g_update.empty()) {
         host_log("FS update=%s (the game's update: its files are read in place of the game folder's)", g_update.c_str());
@@ -951,6 +984,8 @@ GUEST_ABI int hle_kernel_open(const char* path, int flags, int mode) {
     if (host.empty()) {
         return log_open(path, host, flags, sce_err(ENOENT));
     }
+    if (read_only_asset(host) && ((flags & 3) || (flags & (kOrbisOCreat | kOrbisOTrunc | kOrbisOAppend))))
+        return log_open(path, host, flags, sce_err(EROFS));
     const bool want_dir = (flags & kOrbisODir) != 0;
 #if defined(_WIN32)
     struct _stat64 st{};
@@ -1218,6 +1253,7 @@ GUEST_ABI int hle_kernel_fstat(int fd, void* sb) {
 GUEST_ABI int hle_kernel_mkdir(const char* path, int mode) {
     MainThreadWait timed(2);  // the main loop's file I/O, for frame stats
     std::string host = guest_to_host(path);
+    if (read_only_asset(host)) return sce_err(EROFS);
     if (host.empty()) {
         return sce_err(ENOENT);
     }
@@ -1232,6 +1268,7 @@ GUEST_ABI int hle_kernel_mkdir(const char* path, int mode) {
 GUEST_ABI int hle_kernel_rmdir(const char* path) {
     MainThreadWait timed(2);  // the main loop's file I/O, for frame stats
     std::string host = guest_to_host(path);
+    if (read_only_asset(host)) return sce_err(EROFS);
     if (host.empty()) {
         return sce_err(ENOENT);
     }
@@ -1245,6 +1282,7 @@ GUEST_ABI int hle_kernel_rmdir(const char* path) {
 GUEST_ABI int hle_kernel_unlink(const char* path) {
     MainThreadWait timed(2);  // the main loop's file I/O, for frame stats
     std::string host = guest_to_host(path);
+    if (read_only_asset(host)) return sce_err(EROFS);
     if (host.empty()) {
         return sce_err(ENOENT);
     }
@@ -1255,6 +1293,7 @@ GUEST_ABI int hle_kernel_rename(const char* a, const char* b) {
     MainThreadWait timed(2);  // the main loop's file I/O, for frame stats
     std::string ha = guest_to_host(a);
     std::string hb = guest_to_host(b);
+    if (read_only_asset(ha) || read_only_asset(hb)) return sce_err(EROFS);
     if (ha.empty() || hb.empty()) {
         return sce_err(ENOENT);
     }
@@ -1264,6 +1303,7 @@ GUEST_ABI int hle_kernel_rename(const char* a, const char* b) {
 GUEST_ABI int hle_kernel_truncate(const char* path, std::int64_t len) {
     MainThreadWait timed(2);  // the main loop's file I/O, for frame stats
     std::string host = guest_to_host(path);
+    if (read_only_asset(host)) return sce_err(EROFS);
     if (host.empty()) {
         return sce_err(ENOENT);
     }
@@ -1287,6 +1327,7 @@ GUEST_ABI int hle_kernel_ftruncate(int fd, std::int64_t len) {
     if (!f || f->host_fd < 0) {
         return sce_err(EBADF);
     }
+    if (read_only_asset(f->host_path)) return sce_err(EROFS);
 #if defined(_WIN32)
     return _chsize_s(f->host_fd, len) == 0 ? 0 : sce_err(errno);
 #else
@@ -1297,8 +1338,8 @@ GUEST_ABI int hle_kernel_ftruncate(int fd, std::int64_t len) {
 }  // namespace
 
 void hle_fs_set_roots(const char* app0, const char* data, const char* tmp, const char* eboot_path,
-                      const char* mods) {
-    set_roots(app0, data, tmp, eboot_path, mods);
+                      const char* mods, const char* asset_dvdroot) {
+    set_roots(app0, data, tmp, eboot_path, mods, asset_dvdroot);
 }
 
 const char* hle_fs_mods_root() { return g_mods.c_str(); }
@@ -1410,6 +1451,15 @@ std::string hle_fs_overlay_file(const char* rel) {
     for (const OverlayLayer& layer_of : overlay_layers()) {
         const std::string* layer = layer_of.dir;
         if (layer->empty() || !rel) continue;
+        if (layer_of.dvdroot_only) {
+            std::string rest = rel[0] == '/' ? rel + 1 : rel;
+            if (has_dotdot(rest) || rest.rfind("dvdroot_ps4/", 0) != 0) continue;
+            rest.erase(0, 12);
+            std::string p = join_path(*layer, rest);
+            if (!path_exists(p.c_str())) p = resolve_nocase(*layer, rest);
+            if (!p.empty() && path_exists(p.c_str()) && !is_dir_path(p.c_str())) return p;
+            continue;
+        }
         const std::string p = join_path(*layer, rel[0] == '/' ? rel + 1 : rel);
         if (path_exists(p.c_str())) return p;
         const std::string ci = resolve_nocase(*layer, rel[0] == '/' ? rel + 1 : rel);

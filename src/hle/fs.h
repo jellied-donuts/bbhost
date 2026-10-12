@@ -6,8 +6,10 @@
 // is the port's asset overlay - a directory resolved ahead of the dump for
 // /app0 reads, so a modified asset never has to be written into the dump. It
 // defaults to <data>/mods and is ignored when that directory does not exist.
+// asset_dvdroot is an optional already merged dvdroot_ps4 tree, read before
+// other asset layers. Its symlinks are trusted for reads; no writes are allowed.
 void hle_fs_set_roots(const char* app0, const char* data, const char* tmp, const char* eboot_path,
-                      const char* mods);
+                      const char* mods, const char* asset_dvdroot = nullptr);
 const char* hle_fs_data_root();  // host path of the data root; empty when none is set
 const char* hle_fs_mods_root();  // host path of the asset overlay; empty when there is none
 const char* hle_fs_app0_root();  // host path of the dump; empty when none is set
