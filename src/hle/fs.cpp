@@ -518,6 +518,43 @@ std::atomic<int> g_nocase_hits{0};
 // Dynamic mounts (save data): guest prefix -> host directory under g_data.
 std::vector<std::pair<std::string, std::string>> g_mounts;
 
+#if defined(_WIN32)
+// Some CRT stat implementations report reparse-point metadata (including a
+// size of zero) instead of the file the game will actually read. Query the
+// opened target for links; ordinary files keep the existing CRT path.
+int stat_asset_target(const char* path, struct _stat64* st) {
+    const DWORD attr = GetFileAttributesA(path);
+    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_REPARSE_POINT))
+        return _stat64(path, st);
+    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD e = GetLastError();
+        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT :
+                e == ERROR_ACCESS_DENIED ? EACCES : EIO;
+        return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    const BOOL ok = GetFileInformationByHandle(h, &info);
+    CloseHandle(h);
+    if (!ok) { errno = EIO; return -1; }
+    *st = {};
+    st->st_mode = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? _S_IFDIR : _S_IFREG;
+    st->st_size = static_cast<decltype(st->st_size)>((std::uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow);
+    const auto seconds = [](FILETIME t) -> std::int64_t {
+        const std::uint64_t ticks = (std::uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+        constexpr std::uint64_t epoch = 116444736000000000ULL;
+        return ticks >= epoch ? static_cast<std::int64_t>((ticks - epoch) / 10000000ULL) : 0;
+    };
+    st->st_mtime = seconds(info.ftLastWriteTime);
+    st->st_atime = seconds(info.ftLastAccessTime);
+    st->st_ctime = seconds(info.ftCreationTime);
+    st->st_nlink = 1;
+    return 0;
+}
+#endif
+
 // An empty replacement is not a usable game asset. Some prepared mod trees
 // contain zero-byte entries: never let one shadow the normal asset layers.
 // stat follows BB_Launcher's symlinks; missing/broken links also fall through.
@@ -525,7 +562,7 @@ bool merged_asset_usable(const std::string& path) {
     if (path.empty()) return false;
 #if defined(_WIN32)
     struct _stat64 st{};
-    if (_stat64(path.c_str(), &st) != 0 || !(st.st_mode & _S_IFREG)) return false;
+    if (stat_asset_target(path.c_str(), &st) != 0 || !(st.st_mode & _S_IFREG)) return false;
 #else
     struct stat st{};
     if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return false;
@@ -841,7 +878,7 @@ int stat_host(const char* host, void* sb) {
     }
 #if defined(_WIN32)
     struct _stat64 st{};
-    if (_stat64(host, &st) != 0) {
+    if (stat_asset_target(host, &st) != 0) {
         return sce_err(errno);
     }
     fill_orbis_stat(sb, static_cast<std::uint64_t>(st.st_size), (st.st_mode & _S_IFDIR) != 0,
@@ -1008,7 +1045,7 @@ GUEST_ABI int hle_kernel_open(const char* path, int flags, int mode) {
     const bool want_dir = (flags & kOrbisODir) != 0;
 #if defined(_WIN32)
     struct _stat64 st{};
-    const int st_ok = _stat64(host.c_str(), &st);
+    const int st_ok = stat_asset_target(host.c_str(), &st);
     const bool is_dir = st_ok == 0 && (st.st_mode & _S_IFDIR) != 0;
 #else
     struct stat st{};
